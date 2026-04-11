@@ -1,0 +1,10 @@
+collection_name: smartshop_rag
+persist_directory: chroma_db
+k: 4
+data_path: data/knowledge_base
+md5_hex_store: md5.text
+allow_knowledge_file_type: ["txt", "pdf"]
+
+chunk_size: 300
+chunk_overlap: 40
+separators: ["\n\n", "\n", "。", "！", "？", ".", "!", "?", " ", ""]

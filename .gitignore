@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+.venv/
+venv/
+
+# Environment files
+.env
+.env.*
+!.env.example
+.env copy.example
+
+# IDE / editor
+.idea/
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Runtime outputs
+logs/
+data/sessions/*
+!data/sessions/.gitkeep
+.tmp/
+
+# Local databases and generated stores
+chroma_db/
+md5.text
+
+# Test / cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+tests/.tmp/
+
+# Streamlit / misc local state
+.streamlit/
+
+# notebooks / local docs drafts
+notebooks/
