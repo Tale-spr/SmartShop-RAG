@@ -4,7 +4,7 @@ import unittest
 import uuid
 from pathlib import Path
 
-from smart_clean_agent.services.session_service import create_session, delete_session, get_latest_session, list_sessions, load_session, save_session
+from smartshop_rag.services.session_service import create_session, delete_session, get_latest_session, list_sessions, load_session, save_session
 
 
 class SessionServiceTestCase(unittest.TestCase):

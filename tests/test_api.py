@@ -3,22 +3,22 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from smart_clean_agent.api.main import create_app
-from smart_clean_agent.services.chat_service import ChatServiceError
+from smartshop_rag.api.main import create_app
+from smartshop_rag.services.chat_service import ChatServiceError
 
 
 class ApiTestCase(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(create_app())
 
-    @patch("smart_clean_agent.api.main.get_dependency_issues", return_value=[])
+    @patch("smartshop_rag.api.main.get_dependency_issues", return_value=[])
     def test_health_returns_healthy(self, mock_get_dependency_issues):
         response = self.client.get("/health")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "healthy")
 
-    @patch("smart_clean_agent.api.main.get_dependency_issues", return_value=["未配置 DASHSCOPE_API_KEY"])
+    @patch("smartshop_rag.api.main.get_dependency_issues", return_value=["未配置 DASHSCOPE_API_KEY"])
     def test_health_returns_unhealthy(self, mock_get_dependency_issues):
         response = self.client.get("/health")
 
@@ -26,8 +26,8 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(response.json()["status"], "unhealthy")
         self.assertIn("missing_dependencies", response.json())
 
-    @patch("smart_clean_agent.api.main.run_chat")
-    @patch("smart_clean_agent.api.main.get_dependency_issues", return_value=[])
+    @patch("smartshop_rag.api.main.run_chat")
+    @patch("smartshop_rag.api.main.get_dependency_issues", return_value=[])
     def test_chat_returns_answer(self, mock_get_dependency_issues, mock_run_chat):
         mock_run_chat.return_value = {
             "user_id": "1001",
@@ -50,15 +50,15 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["answer"], "这款商品支持七天无理由，具体以页面规则为准。")
 
-    @patch("smart_clean_agent.api.main.get_dependency_issues", return_value=["本地向量库不存在"])
+    @patch("smartshop_rag.api.main.get_dependency_issues", return_value=["本地向量库不存在"])
     def test_chat_returns_dependency_error_when_not_ready(self, mock_get_dependency_issues):
         response = self.client.post("/chat", json={"user_id": "1001", "message": "你好"})
 
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["code"], "dependency_not_ready")
 
-    @patch("smart_clean_agent.api.main.get_dependency_issues", return_value=[])
-    @patch("smart_clean_agent.api.main.run_chat", side_effect=ChatServiceError("指定会话不存在", code="session_not_found", status_code=404))
+    @patch("smartshop_rag.api.main.get_dependency_issues", return_value=[])
+    @patch("smartshop_rag.api.main.run_chat", side_effect=ChatServiceError("指定会话不存在", code="session_not_found", status_code=404))
     def test_chat_returns_service_error(self, mock_run_chat, mock_get_dependency_issues):
         response = self.client.post("/chat", json={"user_id": "1001", "message": "你好"})
 

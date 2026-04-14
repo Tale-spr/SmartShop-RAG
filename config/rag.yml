@@ -1,4 +1,13 @@
 models:
   primary_chat: qwen-plus
   rag_chat: qwen-plus
+  rewrite_chat: qwen-flash
+  rerank_chat: qwen-flash
   embedding: text-embedding-v4
+
+retrieval:
+  default_mode: hybrid_rerank
+  vector_top_k: 6
+  bm25_top_k: 6
+  rerank_top_n: 4
+  rerank_candidate_limit: 8

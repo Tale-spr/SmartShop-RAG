@@ -3,7 +3,7 @@ import unittest
 import uuid
 from pathlib import Path
 
-from smart_clean_agent.services.chat_service import run_chat
+from smartshop_rag.services.chat_service import run_chat
 
 
 class DummyAgent:
@@ -25,7 +25,7 @@ class ChatServiceTestCase(unittest.TestCase):
         shutil.rmtree(self.base_dir, ignore_errors=True)
 
     def test_run_chat_creates_session_and_returns_answer(self):
-        from smart_clean_agent.services import session_service
+        from smartshop_rag.services import session_service
 
         original = session_service.get_session_store_dir
         session_service.get_session_store_dir = lambda base_dir=None: self.base_dir if base_dir is None else original(base_dir)

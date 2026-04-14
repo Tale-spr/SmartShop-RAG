@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock
 
-from smart_clean_agent.agent.tools.agent_tools import create_agent_tools
+from smartshop_rag.agent.tools.agent_tools import create_agent_tools
 
 
 class AgentToolFactoryTestCase(unittest.TestCase):

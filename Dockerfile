@@ -14,4 +14,4 @@ COPY prompts ./prompts
 
 EXPOSE 8000
 
-CMD ["uvicorn", "smart_clean_agent.api.main:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "smartshop_rag.api.main:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8000"]

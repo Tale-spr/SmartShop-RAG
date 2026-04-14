@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock
 
-from smart_clean_agent.services.status_event_service import get_visible_status_events, record_status_event
+from smartshop_rag.services.status_event_service import get_visible_status_events, record_status_event
 
 
 class StatusEventServiceTestCase(unittest.TestCase):
