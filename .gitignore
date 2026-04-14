@@ -44,3 +44,22 @@ tests/.tmp/
 
 # notebooks / local docs drafts
 notebooks/
+
+# Ragas generated artifacts
+data/eval/ragas/datasets/*.jsonl
+data/eval/ragas/results/*
+!data/eval/ragas/results/.gitkeep
+data/eval/ragas/reports/*.md
+!data/eval/ragas/reports/.gitkeep
+
+# Optional: ignore raw knowledge collection materials going forward
+data/knowledge_base/**/raw/*.jpg
+data/knowledge_base/**/raw/*.jpeg
+data/knowledge_base/**/raw/*.png
+data/knowledge_base/**/raw/*.webp
+data/knowledge_base/**/raw/*.pdf
+
+# Optional: ignore future raw exports and scratch files
+data/knowledge_base/**/raw/*.csv
+data/knowledge_base/**/raw/*.json
+data/knowledge_base/**/raw/*.jsonl

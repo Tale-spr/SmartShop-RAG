@@ -10,6 +10,7 @@ class ModelFactoryTestCase(unittest.TestCase):
         self.assertEqual(get_chat_model_name('rag_chat'), 'qwen-plus')
         self.assertEqual(get_chat_model_name('rewrite_chat'), 'qwen-flash')
         self.assertEqual(get_chat_model_name('rerank_chat'), 'qwen-flash')
+        self.assertEqual(get_chat_model_name('eval_chat'), 'qwen-flash')
 
     def test_get_chat_model_name_raises_for_unknown_role(self):
         with self.assertRaises(ValueError):

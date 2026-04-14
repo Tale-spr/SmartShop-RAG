@@ -3,6 +3,7 @@ models:
   rag_chat: qwen-plus
   rewrite_chat: qwen-flash
   rerank_chat: qwen-flash
+  eval_chat: qwen-flash
   embedding: text-embedding-v4
 
 retrieval:

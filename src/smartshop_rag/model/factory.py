@@ -12,6 +12,7 @@ CHAT_MODEL_ROLE_MAP = {
     "rag_chat": "rag_chat",
     "rewrite_chat": "rewrite_chat",
     "rerank_chat": "rerank_chat",
+    "eval_chat": "eval_chat",
 }
 
 
