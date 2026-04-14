@@ -63,3 +63,6 @@ data/knowledge_base/**/raw/*.pdf
 data/knowledge_base/**/raw/*.csv
 data/knowledge_base/**/raw/*.json
 data/knowledge_base/**/raw/*.jsonl
+
+# Raw knowledge assets
+data/knowledge_base/**/raw/
