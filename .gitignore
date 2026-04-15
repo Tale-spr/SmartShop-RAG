@@ -66,3 +66,4 @@ data/knowledge_base/**/raw/*.jsonl
 
 # Raw knowledge assets
 data/knowledge_base/**/raw/
+data/query_sets/*experiment*.jsonl

@@ -1,15 +1,19 @@
 FROM python:3.13-slim
 
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PIP_NO_CACHE_DIR=1
+
 WORKDIR /app
 
 COPY requirements.txt pyproject.toml README.md ./
-RUN pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir python-dotenv==1.1.1
 
 COPY src ./src
+RUN pip install --no-cache-dir -e .
+
 COPY config ./config
 COPY data ./data
-COPY docs ./docs
 COPY prompts ./prompts
 
 EXPOSE 8000

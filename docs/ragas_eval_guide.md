@@ -1,72 +1,58 @@
-# Ragas 评测接入指南
+# Ragas 评测指南
 
 ## 目标
 
-这条评测链路只服务 `main_v2` 主测试集，用来回答四个问题：
+Ragas 在本项目中的作用是补充评估检索上下文质量和回答可信度，而不是替代主测试集和专项测试集。
 
-- 混合检索和重排是否提升了上下文相关性
-- 回答是否基本建立在检索到的上下文上
-- 哪些类别问题最弱
-- 当前更像是检索问题，还是回答 groundedness 问题
+当前主要关注三项指标：
 
-`model_confirmation_v1` 继续保留为独立专项测试集，不强行塞进 Ragas。
+- `ContextPrecision`
+- `Faithfulness`
+- `AnswerRelevancy`
 
 ## 目录结构
 
-- `src/smartshop_rag/eval/`
-  - `build_ragas_dataset.py`
-  - `run_ragas_eval.py`
-  - `analyze_ragas_results.py`
-- `data/eval/ragas/`
-  - `annotations/`
-  - `datasets/`
-  - `results/`
-  - `reports/`
+```text
+src/smartshop_rag/eval/
+data/eval/ragas/
+├─annotations/
+├─datasets/
+├─results/
+└─reports/
+```
 
 ## 环境准备
-
-先安装 Ragas 依赖：
 
 ```powershell
 pip install ragas==0.3.9 datasets==4.4.1
 ```
 
-如果你发现 `ragas` 在当前 Python 3.13 环境中不稳定，优先切到 Python 3.11，而不是继续硬扛当前环境。
+如当前 Python 版本与 `ragas` 兼容性不稳定，优先使用更稳定的环境再运行评测。
 
 ## 模型配置
 
-当前项目已经新增 `eval_chat` 角色，默认仍走轻量模型：
+Ragas 评测通过 `eval_chat` 角色调用评测模型，通过现有 embedding 模型提供向量表示。评测模型建议与实验链路保持一致，避免跨模型比较带来口径漂移。
 
-```yaml
-models:
-  eval_chat: qwen-flash
-```
+## 第一步：准备标注
 
-Ragas 运行时会把：
+当前项目使用独立标注文件提供 reference，例如：
 
-- `eval_chat` 包装成 `LangchainLLMWrapper`
-- 现有 DashScope embedding 包装成 `LangchainEmbeddingsWrapper`
+- `data/eval/ragas/annotations/main_v3_reference_answers_v1.jsonl`
 
-## 第一步：准备 reference 标注
-
-第一阶段不要一口气标完全部 `main_v2`。先用当前仓库里的最小标注集：
-
-- `data/eval/ragas/annotations/main_v2_reference_answers_v1.jsonl`
-
-格式示例：
+示例：
 
 ```json
-{"id": "af_002", "reference": "MF-KZ30E201 是 3L 小容量款，机身相对紧凑，更适合宿舍或小空间使用。"}
+{"id": "afm_001", "reference": "示例参考答案"}
 ```
 
 ## 第二步：构建 Ragas 数据集
 
 ```powershell
 $env:PYTHONPATH=(Resolve-Path 'src')
-python src/smartshop_rag/eval/build_ragas_dataset.py --query-set data/query_sets/air_fryer_midea_query_set_main_v2.jsonl --annotations data/eval/ragas/annotations/main_v2_reference_answers_v1.jsonl --mode hybrid_rerank --output data/eval/ragas/datasets/main_v2_ragas_dataset_2026_04_14.jsonl
+python src/smartshop_rag/eval/build_ragas_dataset.py --query-set data/query_sets/air_fryer_midea_query_set_main_v3.jsonl --annotations data/eval/ragas/annotations/main_v3_reference_answers_v1.jsonl --mode hybrid_rerank --output data/eval/ragas/datasets/main_v3_ragas_dataset_hybrid_rerank.jsonl
 ```
 
-输出字段至少包括：
+输出数据至少包含：
 
 - `user_input`
 - `retrieved_contexts`
@@ -75,62 +61,29 @@ python src/smartshop_rag/eval/build_ragas_dataset.py --query-set data/query_sets
 
 ## 第三步：运行 Ragas
 
-先跑不依赖 reference 的核心指标：
+```powershell
+$env:PYTHONPATH=(Resolve-Path 'src')
+python src/smartshop_rag/eval/run_ragas_eval.py --dataset-path data/eval/ragas/datasets/main_v3_ragas_dataset_hybrid_rerank.jsonl
+```
+
+如果需要带 reference 的指标，再追加：
 
 ```powershell
 $env:PYTHONPATH=(Resolve-Path 'src')
-python src/smartshop_rag/eval/run_ragas_eval.py --dataset-path data/eval/ragas/datasets/main_v2_ragas_dataset_2026_04_14.jsonl
+python src/smartshop_rag/eval/run_ragas_eval.py --dataset-path data/eval/ragas/datasets/main_v3_ragas_dataset_hybrid_rerank.jsonl --with-reference-metrics
 ```
-
-如果 reference 与 embedding wrapper 都正常，再补带 reference 的指标：
-
-```powershell
-$env:PYTHONPATH=(Resolve-Path 'src')
-python src/smartshop_rag/eval/run_ragas_eval.py --dataset-path data/eval/ragas/datasets/main_v2_ragas_dataset_2026_04_14.jsonl --with-reference-metrics
-```
-
-当前第一阶段重点指标：
-
-- `ContextPrecision`
-- `Faithfulness`
-- `AnswerRelevancy`
-
-第二阶段再补：
-
-- `ContextRecall`
-- `AnswerCorrectness`
 
 ## 第四步：分析结果
 
 ```powershell
 $env:PYTHONPATH=(Resolve-Path 'src')
-python src/smartshop_rag/eval/analyze_ragas_results.py --results-jsonl data/eval/ragas/results/main_v2_ragas_scores_2026_04_14.jsonl
+python src/smartshop_rag/eval/analyze_ragas_results.py --results-jsonl data/eval/ragas/results/main_v3_ragas_scores_hybrid_rerank.jsonl
 ```
 
-分析报告会写到：
+## 如何解读结果
 
-- `data/eval/ragas/reports/`
+- `ContextPrecision` 低：优先怀疑检索与候选融合
+- `Faithfulness` 低：优先怀疑回答对证据的依赖不够强
+- `AnswerRelevancy` 低：优先怀疑回答结构不够贴题
 
-## 如何读结果
-
-### `ContextPrecision`
-检索回来的上下文是否真的相关。这个分低，优先怀疑检索或重排。
-
-### `Faithfulness`
-回答是否建立在上下文上。这个分低，优先怀疑回答在补脑或约束不够。
-
-### `AnswerRelevancy`
-回答是否真正围绕用户问题。这个分低，优先怀疑 prompt 或回答结构跑偏。
-
-### `ContextRecall`
-关键证据是否被找回。这个指标更依赖 reference 标注质量。
-
-### `AnswerCorrectness`
-回答是否接近 reference。若它低但 `Faithfulness` 高，先检查 reference 是否写得太理想化，或知识库本身覆盖不够。
-
-## 推荐执行顺序
-
-1. 先跑 `build_ragas_dataset.py`
-2. 先跑核心三指标
-3. 再决定是否打开 reference 指标
-4. 最后结合低分样本和 retrieval trace 做问题定位
+Ragas 的作用是帮助定位问题，而不是给项目下单一结论。最终判断仍应结合主测试集、专项测试集和人工抽样。

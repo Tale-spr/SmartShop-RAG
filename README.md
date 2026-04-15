@@ -1,164 +1,113 @@
 # SmartShop-RAG
 
-一个面向电商客服场景的检索增强问答项目。当前版本聚焦单一主线：基于本地知识库完成客服问答，提供 `Streamlit` 演示界面、`FastAPI` 服务接口、向量检索、RAG 摘要生成和最小检索链路可观测性。
+一个面向电商客服场景的检索增强问答项目，当前聚焦某品牌部分型号空气炸锅商品知识问答。项目提供本地知识库、混合检索与重排、Web 演示界面、API 服务，以及一套可复现的评测链路。
 
 ## 项目定位
 
-SmartShop-RAG 的目标不是做通用 Agent，而是做一个结构清晰、数据来源可信、便于继续扩展的电商客服 RAG 项目。当前仓库保留了最小可运行骨架，后续会围绕以下方向继续迭代：
+SmartShop-RAG 是一个围绕“客服问答主链路”展开的 RAG 项目。它关注三个核心问题：
 
-- 混合检索：向量检索 + BM25
-- 检索优化：query rewrite、rerank、去重与融合
-- 证据展示：回答引用与检索 trace 展示
-- 数据建设：使用公开、可解释的电商客服知识数据集替换旧 demo 数据
+- 如何把公开商品信息、说明书和售后规则整理成可解释知识库
+- 如何用混合检索和重排提升客服问答的证据命中率
 
-## 当前能力
+## 核心能力
 
-- 电商客服问答主链路
-- 本地知识库构建与向量检索
-- RAG 摘要生成与最终回答生成
-- `GET /health` 健康检查
-- `POST /chat` 单一问答接口
-- `Streamlit` 本地聊天演示页面
-- 会话级消息存储与摘要
-- 检索阶段状态事件和基础 trace
+- 本地知识库构建与向量库持久化
+- 向量检索、BM25、混合检索与加权融合实验
+- Query rewrite、候选重排、检索 trace 记录
+- 面向客服场景的最终回答生成
+- Streamlit 聊天演示页面
+- FastAPI 服务接口
+- Ragas 离线评测与实验分析脚本
 
-## 当前不包含
+## 系统设计
 
-当前仓库已经明确移除以下主线能力：
+### 数据组织
 
-- 报告生成
-- 用户长期记忆 / 趋势记忆
-- 自定义离线 evaluation 主线
-- 多工具 Agent 工作流
+知识库当前围绕空气炸锅品类构建，数据来源包括：
 
-这个项目当前只服务于一个目标：把电商客服 RAG 主链路做扎实。
+- 商品详情页卖点与参数
+- 说明书常见问题与清洁保养信息
+- 售后、退换货、发票、配送等公共规则
 
-## 技术栈
+知识以 `cleaned/` 文档为检索主数据源，按品牌、型号、文档类型组织，并在向量库中补充：
 
-- Python
-- Streamlit
-- FastAPI
-- LangChain
-- Chroma
-- DashScope
-- PyYAML
-- Requests
+- `brand`
+- `model`
+- `doc_type`
+- `source_path`
+- `chunk_id`
 
-## 目录结构
+### 检索链路
 
-```text
-.
-├─config/                         # 模型、向量库、提示词、会话存储配置
-├─data/
-│  ├─knowledge_base/              # 电商客服知识库原始文件
-│  └─sessions/                    # 本地会话存储
-├─docs/                           # 项目文档
-├─prompts/                        # 主回答与 RAG 摘要提示词
-├─src/
-│  └─smartshop_rag/
-│     ├─agent/                    # RAG 问答编排
-│     ├─api/                      # FastAPI 接口
-│     ├─model/                    # 模型工厂
-│     ├─rag/                      # 检索与向量库
-│     ├─services/                 # 会话、依赖、状态事件
-│     ├─ui/                       # Streamlit UI 组件
-│     ├─utils/                    # 通用工具
-│     └─web/                      # Streamlit 启动与 bootstrap
-├─tests/                          # 最小测试集
-├─environment.yml                 # conda 环境配置
-├─requirements.txt                # pip 依赖清单
-├─pyproject.toml
-└─README.md
-```
+当前主链路采用：
 
-## 系统流程
+1. Query rewrite
+2. 双路召回：向量检索 + BM25
+3. 候选融合
+4. 轻量重排
+5. 基于证据的回答生成
 
-当前主链路比较简单：
+项目内保留了多种检索模式，用于实验对比和误差分析；对外展示的默认主链路聚焦在稳定可用的混合检索与重排方案上。
 
-1. 用户输入问题
-2. 系统从本地知识库检索相关资料
-3. RAG 模块先对检索结果做摘要整理
-4. 主模型结合用户问题、会话上下文和检索证据生成最终回答
-5. 同时记录基础状态事件和检索 trace
+### 回答生成
 
-这是一条标准的 RAG 问答链路，不包含复杂 Agent 工具规划。
+回答阶段结合：
 
-## 模型配置
+- 用户问题
+- 检索到的证据文本
+- 会话摘要
+- 型号确认状态
 
-模型角色在 `config/rag.yml` 中配置：
+目标是尽量给出基于当前知识库的客服式回答，并在型号不明确时保持保守。
 
-- `primary_chat`：最终回答生成
-- `rag_chat`：检索摘要生成
-- `embedding`：向量检索 embedding
+## 项目亮点
 
-## 环境准备
+- 知识来源公开且可解释，便于追踪回答依据
+- 同时建设了主测试集、型号确认专项集和 Ragas 标注集
+- 检索与回答链路可观测，便于分析命中、排序和 groundedness 问题
+- 支持本地演示、API 服务和离线评测三种使用方式
 
-### 方式一：使用 conda
+## 快速开始
+
+### 1. 安装依赖
+
+使用 conda：
 
 ```powershell
 conda env create -f environment.yml
 conda activate smartshop-rag
 ```
 
-### 方式二：使用 pip
+或使用 pip：
 
 ```powershell
 pip install -r requirements.txt
-pip install python-dotenv==1.1.1
 ```
 
-## 环境变量
+### 2. 配置环境变量
 
-至少需要配置：
-
-- `DASHSCOPE_API_KEY`
-
-可以在项目根目录创建 `.env`：
+在项目根目录创建 `.env`：
 
 ```env
 DASHSCOPE_API_KEY=your_dashscope_api_key
 ```
 
-## 数据准备
-
-当前项目不再内置旧的扫地机器人 demo 数据。你需要自行准备新的电商客服知识文件，并放到：
-
-```text
-data/knowledge_base/
-```
-
-推荐放入的内容包括：
-
-- 平台帮助中心规则
-- 商家 FAQ
-- 商品详情说明
-- 售后 / 退换货 / 配送规则
-- 公开商品问答或清洗后的客服知识文本
-
-当前默认支持的文件类型由 `config/chroma.yml` 控制，现为：
-
-- `txt`
-- `pdf`
-
-## 构建向量库
-
-放入知识文件后，执行：
+### 3. 构建向量库
 
 ```powershell
+$env:PYTHONPATH=(Resolve-Path 'src')
 python src/smartshop_rag/rag/ingest.py
 ```
 
-成功后会在本地生成向量库目录 `chroma_db/`。
+### 4. 启动演示或 API
 
-## 启动方式
-
-### 启动 Streamlit
+启动 Streamlit：
 
 ```powershell
 streamlit run src/smartshop_rag/web/app.py
 ```
 
-### 启动 FastAPI
+启动 FastAPI：
 
 ```powershell
 uvicorn smartshop_rag.api.main:app --app-dir src --reload
@@ -166,45 +115,56 @@ uvicorn smartshop_rag.api.main:app --app-dir src --reload
 
 ## API
 
-当前仅保留两个接口：
+当前对外接口保持精简：
 
 - `GET /health`
 - `POST /chat`
 
-详细说明见 `docs/api_usage_guide.md`。
+接口字段说明见：[API 使用说明](docs/api_usage_guide.md)
 
-### 聊天接口示例
+## 实验与评测
 
-```powershell
-Invoke-RestMethod -Method POST `
-  -Uri "http://127.0.0.1:8000/chat" `
-  -ContentType "application/json" `
-  -Body '{"user_id":"demo_user","message":"这款商品支持七天无理由吗？"}'
+当前项目保留一套完整的离线评测方法，但 README 只展示最终口径下值得保留的结论：
+
+- 主检索链路采用混合检索与重排，当前表现整体优于单一检索方式
+- 检索层总体较稳，当前主要优化空间更多在回答贴题性与 groundedness
+- 型号确认场景需要单独测试，不能与普通问答主测试集混在一起
+- Ragas 用于补充验证上下文相关性、回答可信度和回答相关性，而不是替代业务专项测试
+
+详细说明见：[项目评测说明](docs/项目评测说明.md)
+
+## 目录结构
+
+```text
+.
+├─config/                    # 模型、检索、向量库配置
+├─data/
+│  ├─knowledge_base/         # 商品知识与规则知识
+│  ├─query_sets/             # 主测试集、专项测试集、Ragas 候选集
+│  └─eval/ragas/             # 标注、数据集、评测结果
+├─docs/                      # API、数据组织、评测说明等文档
+├─prompts/                   # 回答生成与检索相关提示词
+├─src/smartshop_rag/
+│  ├─api/                    # FastAPI 服务
+│  ├─web/                    # Streamlit 启动与装配
+│  ├─rag/                    # 检索、向量库、实验脚本
+│  ├─model/                  # 模型工厂与模型适配层
+│  ├─services/               # 会话、依赖与状态事件
+│  └─eval/                   # Ragas 数据集构建与结果分析
+├─tests/                     # 核心测试
+└─README.md
 ```
 
-## 可观测性
+## 相关文档
 
-当前项目不再保留旧的 Agent 级复杂 trace，但仍保留最小可观测性：
+- [API 使用说明](docs/api_usage_guide.md)
+- [数据组织说明](docs/数据组织说明.md)
+- [项目评测说明](docs/项目评测说明.md)
+- [Ragas 评测指南](docs/ragas_eval_guide.md)
 
-- 状态事件：检索中、回答生成中
-- 检索 trace：当前 query、召回文档数量
-- 会话摘要：最近几轮用户与助手对话摘要
+## 后续方向
 
-这部分是为了后续继续做混合检索和检索效果对比时，保留最基本的调试能力。
-
-## 当前限制
-
-- 当前检索主链路仍以向量检索为主
-- 尚未接入 BM25、混合检索、rerank 和引用展示
-- 当前知识库质量完全取决于你准备的数据集
-- 当前项目只是 RAG 骨架，真正的亮点将来自后续的数据建设和检索优化
-
-## 后续规划
-
-下一阶段优先级：
-
-1. 收集公开、可信的电商客服知识数据
-2. 完成数据清洗和知识库重建
-3. 引入 BM25 和混合检索
-4. 增加 rerank 和引用展示
-5. 再考虑是否补充社区认可的 RAG 评测方式
+- 继续扩充知识库中的型号覆盖与规则覆盖
+- 优化混合检索融合策略和回答 groundedness
+- 扩展更完整的客服专项测试与评测样本
+- 在保持可解释性的前提下提升回答稳定性
