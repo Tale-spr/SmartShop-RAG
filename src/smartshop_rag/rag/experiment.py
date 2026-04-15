@@ -22,7 +22,20 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="运行混合检索离线对照实验")
     parser.add_argument("--query-set", default="data/query_sets/air_fryer_midea_query_set_v1.jsonl")
     parser.add_argument("--output", default="data/query_sets/air_fryer_midea_experiment_v1.jsonl")
-    parser.add_argument("--modes", nargs="*", default=["vector", "bm25", "hybrid", "hybrid_rerank"])
+    parser.add_argument(
+        "--modes",
+        nargs="*",
+        default=[
+            "vector",
+            "bm25",
+            "hybrid",
+            "hybrid_rerank",
+            "weighted_rrf",
+            "weighted_rrf_rerank",
+            "weighted_rrf_v2",
+            "weighted_rrf_v2_rerank",
+        ],
+    )
     args = parser.parse_args()
 
     embedding_model = create_embedding_model()

@@ -40,11 +40,58 @@ class RagSummarizeService:
         self.default_mode = str(self.retrieval_conf.get("default_mode", "hybrid_rerank"))
         self.vector_top_k = int(self.retrieval_conf.get("vector_top_k", 6))
         self.bm25_top_k = int(self.retrieval_conf.get("bm25_top_k", 6))
+        self.vector_weight = float(self.retrieval_conf.get("vector_weight", 0.7))
+        self.bm25_weight = float(self.retrieval_conf.get("bm25_weight", 0.3))
+        self.rrf_k = int(self.retrieval_conf.get("rrf_k", 60))
+        self.bm25_top_k_v2 = int(self.retrieval_conf.get("bm25_top_k_v2", 4))
+        self.weighted_rrf_v2_conf = dict(self.retrieval_conf.get("weighted_rrf_v2", {}))
+        self.model_mismatch_penalty = float(self.weighted_rrf_v2_conf.get("model_mismatch_penalty", 0.5))
+        self.manual_bias_boost = float(self.weighted_rrf_v2_conf.get("manual_bias_boost", 1.1))
+        self.weighted_rrf_v2_bucket_conf = {
+            "explicit_model": self._load_v2_bucket_conf("explicit_model", 0.85, 0.15, 60),
+            "weak_feature": self._load_v2_bucket_conf("weak_feature", 0.60, 0.40, 60),
+            "generic": self._load_v2_bucket_conf("generic", 0.75, 0.25, 60),
+        }
         self.rerank_top_n = int(self.retrieval_conf.get("rerank_top_n", 4))
         self.rerank_candidate_limit = int(self.retrieval_conf.get("rerank_candidate_limit", 8))
         self._bm25_index: BM25Index | None = None
         self._all_chunked_documents: list[Document] | None = None
         self._model_pattern = re.compile(r"\bMF-[A-Z0-9]+\b", re.IGNORECASE)
+        self._weak_feature_pattern = re.compile(r"\b(?:\d+(?:\.\d+)?L|\d{4})\b", re.IGNORECASE)
+        self._weak_feature_keywords = {
+            "可视窗",
+            "旋钮",
+            "双热源",
+            "自动断电",
+            "触控",
+            "按键",
+            "电子可视",
+            "方形烤篮",
+            "圆形烤篮",
+        }
+        self._manual_intent_keywords = {
+            "首次使用",
+            "第一次用",
+            "不工作",
+            "推不进去",
+            "异响",
+            "白烟",
+            "清洁",
+            "怎么检查",
+            "怎么处理",
+            "怎么用",
+            "怎么清洗",
+            "故障",
+            "排查",
+        }
+
+    def _load_v2_bucket_conf(self, bucket_name: str, default_vector_weight: float, default_bm25_weight: float, default_rrf_k: int) -> dict[str, float | int]:
+        bucket_conf = dict(self.weighted_rrf_v2_conf.get(bucket_name, {}))
+        return {
+            "vector_weight": float(bucket_conf.get("vector_weight", default_vector_weight)),
+            "bm25_weight": float(bucket_conf.get("bm25_weight", default_bm25_weight)),
+            "rrf_k": int(bucket_conf.get("rrf_k", default_rrf_k)),
+        }
 
     def _get_chunked_documents(self) -> list[Document]:
         if self._all_chunked_documents is None:
@@ -90,6 +137,12 @@ class RagSummarizeService:
                     "vector_rank": result.get("rank") if result["source"] == "vector" else None,
                     "bm25_rank": result.get("rank") if result["source"] == "bm25" else None,
                     "source": result["source"],
+                    "rrf_score": None,
+                    "base_rrf_score": None,
+                    "adjusted_rrf_score": None,
+                    "model_match": None,
+                    "model_consistency_penalty_applied": False,
+                    "manual_bias_applied": False,
                 }
                 continue
             if result["source"] == "vector":
@@ -103,6 +156,133 @@ class RagSummarizeService:
         merged_list = list(merged.values())
         merged_list.sort(key=lambda item: (item.get("vector_rank") or 9999, item.get("bm25_rank") or 9999))
         return merged_list[: self.vector_top_k + self.bm25_top_k]
+
+    def _build_weighted_rrf_results(
+        self,
+        vector_results: list[dict[str, Any]],
+        bm25_results: list[dict[str, Any]],
+        *,
+        vector_weight: float,
+        bm25_weight: float,
+        rrf_k: int,
+        candidate_limit: int,
+    ) -> list[dict[str, Any]]:
+        fused: dict[str, dict[str, Any]] = {}
+        for result in vector_results + bm25_results:
+            document: Document = result["document"]
+            chunk_id = str(document.metadata.get("chunk_id") or document.metadata.get("source") or id(document))
+            existing = fused.get(chunk_id)
+            if existing is None:
+                existing = {
+                    "document": document,
+                    "score": result.get("score"),
+                    "vector_rank": None,
+                    "bm25_rank": None,
+                    "source": result["source"],
+                    "base_rrf_score": 0.0,
+                    "adjusted_rrf_score": 0.0,
+                    "rrf_score": 0.0,
+                    "model_match": None,
+                    "model_consistency_penalty_applied": False,
+                    "manual_bias_applied": False,
+                }
+                fused[chunk_id] = existing
+            if result["source"] == "vector":
+                rank = int(result.get("rank") or 0)
+                existing["vector_rank"] = rank
+                existing["base_rrf_score"] += vector_weight / (rrf_k + rank)
+            if result["source"] == "bm25":
+                rank = int(result.get("rank") or 0)
+                existing["bm25_rank"] = rank
+                existing["score"] = result.get("score") if existing.get("score") is None else existing.get("score")
+                existing["base_rrf_score"] += bm25_weight / (rrf_k + rank)
+            existing["adjusted_rrf_score"] = existing["base_rrf_score"]
+            existing["rrf_score"] = existing["adjusted_rrf_score"]
+            if existing["source"] != result["source"]:
+                existing["source"] = "both"
+        fused_list = list(fused.values())
+        fused_list.sort(key=lambda item: item.get("adjusted_rrf_score", 0.0), reverse=True)
+        return fused_list[:candidate_limit]
+
+    def _weighted_rrf_results(self, vector_results: list[dict[str, Any]], bm25_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return self._build_weighted_rrf_results(
+            vector_results,
+            bm25_results,
+            vector_weight=self.vector_weight,
+            bm25_weight=self.bm25_weight,
+            rrf_k=self.rrf_k,
+            candidate_limit=self.vector_top_k + self.bm25_top_k,
+        )
+
+    def _determine_query_bucket(self, query: str, normalized_query: str, detected_query_models: list[str]) -> str:
+        if detected_query_models:
+            return "explicit_model"
+        combined = f"{query}\n{normalized_query}".lower()
+        if self._weak_feature_pattern.search(combined):
+            return "weak_feature"
+        if any(keyword.lower() in combined for keyword in self._weak_feature_keywords):
+            return "weak_feature"
+        return "generic"
+
+    def _is_manual_intent_query(self, query: str, normalized_query: str) -> bool:
+        combined = f"{query}\n{normalized_query}".lower()
+        return any(keyword.lower() in combined for keyword in self._manual_intent_keywords)
+
+    def _get_weighted_rrf_v2_params(self, query_bucket: str) -> dict[str, float | int]:
+        return dict(self.weighted_rrf_v2_bucket_conf.get(query_bucket, self.weighted_rrf_v2_bucket_conf["generic"]))
+
+    def _weighted_rrf_v2_results(
+        self,
+        *,
+        query_bucket: str,
+        detected_query_models: list[str],
+        manual_intent: bool,
+        vector_results: list[dict[str, Any]],
+        bm25_results: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        params = self._get_weighted_rrf_v2_params(query_bucket)
+        vector_weight = float(params["vector_weight"])
+        bm25_weight = float(params["bm25_weight"])
+        rrf_k = int(params["rrf_k"])
+        fused_list = self._build_weighted_rrf_results(
+            vector_results,
+            bm25_results,
+            vector_weight=vector_weight,
+            bm25_weight=bm25_weight,
+            rrf_k=rrf_k,
+            candidate_limit=self.vector_top_k + self.bm25_top_k_v2,
+        )
+        detected_set = {model.upper() for model in detected_query_models}
+        penalty_applied = False
+        manual_bias_applied = False
+        for item in fused_list:
+            doc: Document = item["document"]
+            model = str(doc.metadata.get("model", "")).strip().upper()
+            doc_type = str(doc.metadata.get("doc_type", "")).strip().lower()
+            adjusted = float(item.get("base_rrf_score") or 0.0)
+            model_match = True
+            model_penalty = False
+            if query_bucket == "explicit_model" and detected_set and model and model != "SHARED" and model not in detected_set:
+                adjusted *= self.model_mismatch_penalty
+                model_match = False
+                model_penalty = True
+                penalty_applied = True
+            if manual_intent and doc_type == "manual":
+                adjusted *= self.manual_bias_boost
+                item["manual_bias_applied"] = True
+                manual_bias_applied = True
+            item["model_match"] = model_match
+            item["model_consistency_penalty_applied"] = model_penalty
+            item["adjusted_rrf_score"] = adjusted
+            item["rrf_score"] = adjusted
+        fused_list.sort(key=lambda item: item.get("adjusted_rrf_score", 0.0), reverse=True)
+        return fused_list, {
+            "vector_weight": vector_weight,
+            "bm25_weight": bm25_weight,
+            "rrf_k": rrf_k,
+            "model_consistency_penalty_applied": penalty_applied,
+            "manual_bias_applied": manual_bias_applied,
+        }
 
     def _rerank_results(
         self,
@@ -229,14 +409,57 @@ class RagSummarizeService:
         actual_mode = mode or self.default_mode
         normalized_query = self.rewrite_query(query)
         detected_query_models = self._extract_query_models(query, normalized_query)
-        vector_results = self._vector_retrieve(normalized_query, top_k=self.vector_top_k) if actual_mode in {"vector", "hybrid", "hybrid_rerank"} else []
-        bm25_results = self._bm25_retrieve(normalized_query, top_k=self.bm25_top_k) if actual_mode in {"bm25", "hybrid", "hybrid_rerank"} else []
+        query_bucket = self._determine_query_bucket(query, normalized_query, detected_query_models)
+        manual_intent = self._is_manual_intent_query(query, normalized_query)
+        weighted_rrf_modes = {"weighted_rrf", "weighted_rrf_rerank", "weighted_rrf_v2", "weighted_rrf_v2_rerank"}
+        weighted_rrf_v2_modes = {"weighted_rrf_v2", "weighted_rrf_v2_rerank"}
+        bm25_top_k = self.bm25_top_k_v2 if actual_mode in weighted_rrf_v2_modes else self.bm25_top_k
+        vector_results = self._vector_retrieve(normalized_query, top_k=self.vector_top_k) if actual_mode in {"vector", "hybrid", "hybrid_rerank", *weighted_rrf_modes} else []
+        bm25_results = self._bm25_retrieve(normalized_query, top_k=bm25_top_k) if actual_mode in {"bm25", "hybrid", "hybrid_rerank", *weighted_rrf_modes} else []
+        fusion_method = "hybrid_merge"
+        applied_vector_weight: float | None = None
+        applied_bm25_weight: float | None = None
+        applied_rrf_k: int | None = None
+        model_consistency_penalty_applied = False
+        manual_bias_applied = False
         if actual_mode == "vector":
             merged_results = vector_results[: self.rerank_top_n]
             final_results = merged_results
         elif actual_mode == "bm25":
             merged_results = bm25_results[: self.rerank_top_n]
             final_results = merged_results
+        elif actual_mode in weighted_rrf_v2_modes:
+            fusion_method = "weighted_rrf_v2"
+            merged_results, rrf_meta = self._weighted_rrf_v2_results(
+                query_bucket=query_bucket,
+                detected_query_models=detected_query_models,
+                manual_intent=manual_intent,
+                vector_results=vector_results,
+                bm25_results=bm25_results,
+            )
+            applied_vector_weight = float(rrf_meta["vector_weight"])
+            applied_bm25_weight = float(rrf_meta["bm25_weight"])
+            applied_rrf_k = int(rrf_meta["rrf_k"])
+            model_consistency_penalty_applied = bool(rrf_meta["model_consistency_penalty_applied"])
+            manual_bias_applied = bool(rrf_meta["manual_bias_applied"])
+            final_results = self._rerank_results(
+                query=query,
+                normalized_query=normalized_query,
+                merged_results=merged_results,
+                enabled=(actual_mode == "weighted_rrf_v2_rerank"),
+            )
+        elif actual_mode in {"weighted_rrf", "weighted_rrf_rerank"}:
+            fusion_method = "weighted_rrf"
+            merged_results = self._weighted_rrf_results(vector_results, bm25_results)
+            applied_vector_weight = self.vector_weight
+            applied_bm25_weight = self.bm25_weight
+            applied_rrf_k = self.rrf_k
+            final_results = self._rerank_results(
+                query=query,
+                normalized_query=normalized_query,
+                merged_results=merged_results,
+                enabled=(actual_mode == "weighted_rrf_rerank"),
+            )
         else:
             merged_results = self._merge_results(vector_results, bm25_results)
             final_results = self._rerank_results(
@@ -265,12 +488,22 @@ class RagSummarizeService:
             "query": query,
             "normalized_query": normalized_query,
             "mode": actual_mode,
+            "fusion_method": fusion_method,
+            "query_bucket": query_bucket,
+            "manual_intent": manual_intent,
+            "vector_weight": applied_vector_weight,
+            "bm25_weight": applied_bm25_weight,
+            "rrf_k": applied_rrf_k,
+            "applied_vector_weight": applied_vector_weight,
+            "applied_bm25_weight": applied_bm25_weight,
             "detected_query_models": detected_query_models,
             "retrieved_models": retrieved_models,
             "model_confirmation_status": model_confirmation_status,
             "model_confirmation_source": model_confirmation_source,
             "should_reconfirm_model": should_reconfirm_model,
             "confirmed_model": confirmed_model,
+            "model_consistency_penalty_applied": model_consistency_penalty_applied,
+            "manual_bias_applied": manual_bias_applied,
             "vector_hit_count": len(vector_results),
             "bm25_hit_count": len(bm25_results),
             "merged_candidate_count": len(merged_results),
@@ -284,6 +517,14 @@ class RagSummarizeService:
                     "doc_type": str(item["document"].metadata.get("doc_type", "")),
                     "model": str(item["document"].metadata.get("model", "")),
                     "score": item.get("score"),
+                    "vector_rank": item.get("vector_rank"),
+                    "bm25_rank": item.get("bm25_rank"),
+                    "rrf_score": item.get("rrf_score"),
+                    "base_rrf_score": item.get("base_rrf_score"),
+                    "adjusted_rrf_score": item.get("adjusted_rrf_score"),
+                    "model_match": item.get("model_match"),
+                    "model_consistency_penalty_applied": item.get("model_consistency_penalty_applied", False),
+                    "manual_bias_applied": item.get("manual_bias_applied", False),
                 }
                 for index, item in enumerate(final_results, start=1)
             ],

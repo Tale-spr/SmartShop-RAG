@@ -1,14 +1,34 @@
 models:
-  primary_chat: qwen-plus
-  rag_chat: qwen-plus
-  rewrite_chat: qwen-flash
-  rerank_chat: qwen-flash
-  eval_chat: qwen-flash
+  primary_chat: qwen3.5-plus
+  rag_chat: qwen3.5-plus
+  rewrite_chat: qwen3.5-plus
+  rerank_chat: qwen3.5-plus
+  eval_chat: qwen3.5-plus
   embedding: text-embedding-v4
 
 retrieval:
   default_mode: hybrid_rerank
   vector_top_k: 6
   bm25_top_k: 6
+  vector_weight: 0.7
+  bm25_weight: 0.3
+  rrf_k: 60
+  bm25_top_k_v2: 4
+  weighted_rrf_v2:
+    model_mismatch_penalty: 0.5
+    manual_bias_boost: 1.1
+    explicit_model:
+      vector_weight: 0.85
+      bm25_weight: 0.15
+      rrf_k: 60
+    weak_feature:
+      vector_weight: 0.60
+      bm25_weight: 0.40
+      rrf_k: 60
+    generic:
+      vector_weight: 0.75
+      bm25_weight: 0.25
+      rrf_k: 60
   rerank_top_n: 4
   rerank_candidate_limit: 8
+

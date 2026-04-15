@@ -1,10 +1,12 @@
 from abc import ABC, abstractmethod
 from typing import Optional
 
-from langchain_community.chat_models.tongyi import BaseChatModel, ChatTongyi
+from langchain_community.chat_models.tongyi import ChatTongyi
 from langchain_community.embeddings import DashScopeEmbeddings
 from langchain_core.embeddings import Embeddings
+from langchain_core.language_models.chat_models import BaseChatModel
 
+from smartshop_rag.model.responses_chat import QwenResponsesChatModel
 from smartshop_rag.utils.config_handler import rag_conf
 
 CHAT_MODEL_ROLE_MAP = {
@@ -28,7 +30,10 @@ class ChatModelFactory(BaseModelFactory):
         self.role = role
 
     def generator(self) -> Optional[Embeddings | BaseChatModel]:
-        return ChatTongyi(model=self.model_name or get_chat_model_name(self.role))
+        model_name = self.model_name or get_chat_model_name(self.role)
+        if is_responses_api_model(model_name):
+            return QwenResponsesChatModel(model=model_name)
+        return ChatTongyi(model=model_name)
 
 
 class EmbeddingFactory(BaseModelFactory):
@@ -56,6 +61,16 @@ def get_chat_model_name(role: str = "primary_chat") -> str:
     if not model_name:
         raise ValueError(f"config/rag.yml 中未配置 models.{normalized_role}")
     return str(model_name)
+
+
+def is_responses_api_model(model_name: str) -> bool:
+    normalized = model_name.strip().lower()
+    return normalized in {
+        "qwen3.5-plus",
+        "qwen3.5-plus-2026-02-15",
+        "qwen3.6-plus",
+        "qwen3.6-plus-2026-04-02",
+    }
 
 
 def get_embedding_model_name() -> str:
