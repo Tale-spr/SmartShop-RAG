@@ -1,9 +1,10 @@
 models:
-  primary_chat: qwen3.5-plus
-  rag_chat: qwen3.5-plus
-  rewrite_chat: qwen3.5-plus
-  rerank_chat: qwen3.5-plus
-  eval_chat: qwen3.5-plus
+  primary_chat: qwen3.6-plus
+  smalltalk_chat: qwen3.5-flash
+  rag_chat: qwen3.6-plus
+  rewrite_chat: qwen3.6-plus
+  rerank_chat: qwen3.6-plus
+  eval_chat: qwen3.6-plus
   embedding: text-embedding-v4
 
 retrieval:
@@ -31,4 +32,3 @@ retrieval:
       rrf_k: 60
   rerank_top_n: 4
   rerank_candidate_limit: 8
-

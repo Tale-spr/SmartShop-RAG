@@ -11,6 +11,7 @@ from smartshop_rag.utils.config_handler import rag_conf
 
 CHAT_MODEL_ROLE_MAP = {
     "primary_chat": "primary_chat",
+    "smalltalk_chat": "smalltalk_chat",
     "rag_chat": "rag_chat",
     "rewrite_chat": "rewrite_chat",
     "rerank_chat": "rerank_chat",
@@ -32,7 +33,10 @@ class ChatModelFactory(BaseModelFactory):
     def generator(self) -> Optional[Embeddings | BaseChatModel]:
         model_name = self.model_name or get_chat_model_name(self.role)
         if is_responses_api_model(model_name):
-            return QwenResponsesChatModel(model=model_name)
+            return QwenResponsesChatModel(
+                model=model_name,
+                enable_thinking=_get_enable_thinking_for_role(self.role),
+            )
         return ChatTongyi(model=model_name)
 
 
@@ -66,11 +70,16 @@ def get_chat_model_name(role: str = "primary_chat") -> str:
 def is_responses_api_model(model_name: str) -> bool:
     normalized = model_name.strip().lower()
     return normalized in {
+        "qwen3.5-flash",
         "qwen3.5-plus",
         "qwen3.5-plus-2026-02-15",
         "qwen3.6-plus",
         "qwen3.6-plus-2026-04-02",
     }
+
+
+def _get_enable_thinking_for_role(role: str) -> bool | None:
+    return None if role == "primary_chat" else False
 
 
 def get_embedding_model_name() -> str:

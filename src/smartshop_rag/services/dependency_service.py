@@ -11,6 +11,9 @@ from smartshop_rag.utils.path_tool import get_abs_path
 PROMPT_DEPENDENCIES = {
     "main_prompt_path": "主提示词文件",
     "rag_summarize_prompt_path": "RAG 提示词文件",
+    "intent_router_prompt_path": "意图路由提示词文件",
+    "transform_query_prompt_path": "Transform Query 提示词文件",
+    "smalltalk_answer_prompt_path": "Smalltalk Answer 提示词文件",
 }
 
 

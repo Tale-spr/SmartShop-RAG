@@ -153,10 +153,18 @@ def _drain_process_event_queue(
 
 def _build_process_note(event: dict[str, str]) -> str:
     event_type = (event.get("event_type") or "").strip()
+    if event_type == "stage.intent":
+        return "我在判断这个问题是否属于当前空气炸锅知识库可处理的范围。"
+    if event_type == "stage.rewrite":
+        return "我在把你的问题改写成更适合检索的表达。"
     if event_type == "stage.rag":
         return "我在召回和当前商品、售后或规则相关的知识资料。"
+    if event_type == "stage.retry":
+        return "第一次检索信息不够，我在调整查询后补充检索。"
     if event_type == "stage.final":
         return "我在根据检索到的资料整理最终回复。"
+    if event_type == "stage.fallback":
+        return "当前资料不足以稳妥作答，我会转为保守回复。"
     if event_type == "error.agent":
         return "当前处理过程中出现异常，本次回复可能无法完整生成。"
     return ""

@@ -67,3 +67,6 @@ data/knowledge_base/**/raw/*.jsonl
 # Raw knowledge assets
 data/knowledge_base/**/raw/
 data/query_sets/*experiment*.jsonl
+
+docs/Agentic Workflow升级方案.md
+docs/Agentic Workflow升级架构图.md

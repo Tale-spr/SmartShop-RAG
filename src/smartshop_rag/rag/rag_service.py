@@ -13,7 +13,12 @@ from smartshop_rag.model.factory import create_chat_model
 from smartshop_rag.rag.bm25_retriever import BM25Index
 from smartshop_rag.rag.vector_store import VectorStoreService
 from smartshop_rag.utils.config_handler import rag_conf
-from smartshop_rag.utils.prompt_loader import load_query_rewrite_prompt, load_rag_prompts, load_rerank_prompt
+from smartshop_rag.utils.prompt_loader import (
+    load_query_rewrite_prompt,
+    load_rag_prompts,
+    load_rerank_prompt,
+    load_transform_query_prompt,
+)
 
 
 class RagSummarizeService:
@@ -32,6 +37,7 @@ class RagSummarizeService:
         self.rerank_model = rerank_model or create_chat_model(role="rerank_chat")
         self.rewrite_prompt = PromptTemplate.from_template(load_query_rewrite_prompt())
         self.rerank_prompt = PromptTemplate.from_template(load_rerank_prompt())
+        self.transform_query_prompt = PromptTemplate.from_template(load_transform_query_prompt())
         self.last_retrieved_docs: list[Document] = []
         self.last_retrieval_trace: dict[str, Any] = {}
         self.trace_callback: Callable[[str, list[Document]], None] | None = None
@@ -108,6 +114,26 @@ class RagSummarizeService:
         response = self.rewrite_model.invoke([HumanMessage(content=prompt)])
         rewritten = str(getattr(response, "content", "") or "").strip()
         return rewritten or query
+
+    def transform_query(
+        self,
+        *,
+        question: str,
+        current_query: str,
+        session_summary: str = "",
+        recent_history: str = "",
+        retrieval_summary: str = "",
+    ) -> str:
+        prompt = self.transform_query_prompt.format(
+            question=question,
+            current_query=current_query,
+            session_summary=session_summary or "无",
+            recent_history=recent_history or "无",
+            retrieval_summary=retrieval_summary or "上一次检索未命中足够资料。",
+        )
+        response = self.rewrite_model.invoke([HumanMessage(content=prompt)])
+        transformed = str(getattr(response, "content", "") or "").strip()
+        return transformed or current_query
 
     def _vector_retrieve(self, query: str, *, top_k: int) -> list[dict[str, Any]]:
         return self.vector_store.vector_search(query, top_k=top_k)
@@ -405,9 +431,9 @@ class RagSummarizeService:
     ) -> bool:
         return model_confirmation_source in {"retrieval_inferred", "conflicted"}
 
-    def retrieve_docs(self, query: str, *, mode: str | None = None) -> list[Document]:
+    def retrieve_docs(self, query: str, *, mode: str | None = None, rewrite: bool = True) -> list[Document]:
         actual_mode = mode or self.default_mode
-        normalized_query = self.rewrite_query(query)
+        normalized_query = self.rewrite_query(query) if rewrite else query
         detected_query_models = self._extract_query_models(query, normalized_query)
         query_bucket = self._determine_query_bucket(query, normalized_query, detected_query_models)
         manual_intent = self._is_manual_intent_query(query, normalized_query)
@@ -533,9 +559,12 @@ class RagSummarizeService:
             self.trace_callback(query, docs)
         return docs
 
-    def rag_summarize(self, query: str, *, mode: str | None = None) -> str:
-        context_docs = self.retrieve_docs(query, mode=mode)
+    def summarize_docs(self, query: str, docs: list[Document]) -> str:
         context_parts = []
-        for index, doc in enumerate(context_docs, start=1):
+        for index, doc in enumerate(docs, start=1):
             context_parts.append(f"【参考资料{index}】{doc.page_content} | 元数据: {doc.metadata}")
         return self.chain.invoke({"input": query, "context": "\n".join(context_parts)})
+
+    def rag_summarize(self, query: str, *, mode: str | None = None) -> str:
+        context_docs = self.retrieve_docs(query, mode=mode)
+        return self.summarize_docs(query, context_docs)

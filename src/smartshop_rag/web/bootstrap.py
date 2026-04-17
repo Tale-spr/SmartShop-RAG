@@ -22,6 +22,10 @@ def validate_online_dependencies() -> None:
 
 def build_agent() -> ReactAgent:
     chat_model = create_chat_model()
+    try:
+        smalltalk_model = create_chat_model(role='smalltalk_chat')
+    except ValueError:
+        smalltalk_model = None
     embedding_model = create_embedding_model()
     vector_store_service = VectorStoreService(embedding_function=embedding_model)
     rag_service = RagSummarizeService(
@@ -31,7 +35,7 @@ def build_agent() -> ReactAgent:
         vector_store_service=vector_store_service,
     )
     tools = create_agent_tools(rag_service)
-    return ReactAgent(model=chat_model, tools=tools)
+    return ReactAgent(model=chat_model, tools=tools, rag_service=rag_service, smalltalk_model=smalltalk_model)
 
 
 def get_or_create_agent(session_state: MutableMapping[str, Any]) -> ReactAgent:

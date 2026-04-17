@@ -19,6 +19,18 @@ def load_rerank_prompt() -> str:
     return _load_prompt("rerank_prompt_path", "Rerank 提示词")
 
 
+def load_intent_router_prompt() -> str:
+    return _load_prompt("intent_router_prompt_path", "Intent Router 提示词")
+
+
+def load_transform_query_prompt() -> str:
+    return _load_prompt("transform_query_prompt_path", "Transform Query 提示词")
+
+
+def load_smalltalk_answer_prompt() -> str:
+    return _load_prompt("smalltalk_answer_prompt_path", "Smalltalk Answer 提示词")
+
+
 def _load_prompt(config_key: str, label: str) -> str:
     try:
         prompt_path = get_abs_path(prompts_conf[config_key])
