@@ -60,8 +60,24 @@ class RagSummarizeService:
         }
         self.rerank_top_n = int(self.retrieval_conf.get("rerank_top_n", 4))
         self.rerank_candidate_limit = int(self.retrieval_conf.get("rerank_candidate_limit", 8))
+        self.context_postprocess_conf = dict(self.retrieval_conf.get("context_postprocess", {}))
+        self.context_postprocess_enabled = bool(self.context_postprocess_conf.get("enabled", True))
+        context_window_conf = dict(self.context_postprocess_conf.get("context_window", {}))
+        self.context_window_target_chars = int(context_window_conf.get("target_chars", 650))
+        self.context_window_neighbor_window = int(context_window_conf.get("neighbor_window", 1))
+        self.context_window_max_expanded_docs = int(context_window_conf.get("max_expanded_docs", 4))
+        section_role_conf = dict(self.context_postprocess_conf.get("section_role_weighting", {}))
+        self.query_hint_penalty = float(section_role_conf.get("query_hint_penalty", 0.70))
+        self.evidence_boost = float(section_role_conf.get("evidence_boost", 1.08))
+        entity_coverage_conf = dict(self.context_postprocess_conf.get("entity_coverage", {}))
+        self.entity_coverage_enabled = bool(entity_coverage_conf.get("enabled", True))
+        self.entity_coverage_max_supplemental_docs = int(entity_coverage_conf.get("max_supplemental_docs", 3))
         self._bm25_index: BM25Index | None = None
         self._all_chunked_documents: list[Document] | None = None
+        self._chunk_by_id: dict[str, Document] | None = None
+        self._chunks_by_source: dict[str, list[Document]] | None = None
+        self._chunks_by_model: dict[str, list[Document]] | None = None
+        self._model_alias_map: dict[str, str] | None = None
         self._model_pattern = re.compile(r"\bMF-[A-Z0-9]+\b", re.IGNORECASE)
         self._weak_feature_pattern = re.compile(r"\b(?:\d+(?:\.\d+)?L|\d{4})\b", re.IGNORECASE)
         self._weak_feature_keywords = {
@@ -90,6 +106,23 @@ class RagSummarizeService:
             "故障",
             "排查",
         }
+        self._entity_attribute_keywords = {
+            "容量",
+            "功率",
+            "可视窗",
+            "双热源",
+            "双可视",
+            "旋钮",
+            "触控",
+            "按键",
+            "清洗",
+            "故障",
+            "白烟",
+            "异响",
+            "首次使用",
+            "第一次",
+            "不工作",
+        }
 
     def _load_v2_bucket_conf(self, bucket_name: str, default_vector_weight: float, default_bm25_weight: float, default_rrf_k: int) -> dict[str, float | int]:
         bucket_conf = dict(self.weighted_rrf_v2_conf.get(bucket_name, {}))
@@ -108,6 +141,54 @@ class RagSummarizeService:
         if self._bm25_index is None:
             self._bm25_index = BM25Index(self._get_chunked_documents())
         return self._bm25_index
+
+    def _ensure_manifest_indexes(self) -> None:
+        if self._chunk_by_id is not None:
+            return
+        chunk_by_id: dict[str, Document] = {}
+        chunks_by_source: dict[str, list[Document]] = {}
+        chunks_by_model: dict[str, list[Document]] = {}
+        model_alias_map: dict[str, str] = {}
+        for doc in self._get_chunked_documents():
+            metadata = doc.metadata
+            chunk_id = str(metadata.get("chunk_id") or "")
+            if chunk_id:
+                chunk_by_id[chunk_id] = doc
+            source_path = str(metadata.get("source_path") or metadata.get("source") or "")
+            if source_path:
+                chunks_by_source.setdefault(source_path, []).append(doc)
+            model = str(metadata.get("model") or "").strip().upper()
+            if model and model != "SHARED":
+                chunks_by_model.setdefault(model, []).append(doc)
+                for alias in self._build_model_aliases(model):
+                    model_alias_map.setdefault(alias, model)
+        for docs in chunks_by_source.values():
+            docs.sort(key=self._chunk_sort_key)
+        for docs in chunks_by_model.values():
+            docs.sort(key=self._chunk_sort_key)
+        self._chunk_by_id = chunk_by_id
+        self._chunks_by_source = chunks_by_source
+        self._chunks_by_model = chunks_by_model
+        self._model_alias_map = model_alias_map
+
+    def _build_model_aliases(self, model: str) -> set[str]:
+        normalized = model.upper()
+        aliases = {normalized}
+        suffix = normalized.split("-")[-1]
+        aliases.add(suffix)
+        aliases.add(re.sub(r"^KZ[CE]?", "", suffix))
+        return {alias for alias in aliases if alias}
+
+    def _chunk_sort_key(self, doc: Document) -> tuple[str, int]:
+        source_path = str(doc.metadata.get("source_path") or doc.metadata.get("source") or "")
+        try:
+            chunk_index = int(doc.metadata.get("chunk_index", 0))
+        except (TypeError, ValueError):
+            chunk_index = 0
+        return source_path, chunk_index
+
+    def _get_chunk_id(self, doc: Document) -> str:
+        return str(doc.metadata.get("chunk_id") or doc.metadata.get("source") or id(doc))
 
     def rewrite_query(self, query: str) -> str:
         prompt = self.rewrite_prompt.format(input=query)
@@ -239,6 +320,181 @@ class RagSummarizeService:
             rrf_k=self.rrf_k,
             candidate_limit=self.vector_top_k + self.bm25_top_k,
         )
+
+    def _section_role(self, doc: Document) -> str:
+        heading_path = str(doc.metadata.get("heading_path") or "")
+        doc_type = str(doc.metadata.get("doc_type") or "").lower()
+        if "典型问法映射" in heading_path:
+            return "query_hint"
+        if "核心定位" in heading_path:
+            return "overview"
+        evidence_terms = (
+            "规格参数",
+            "核心卖点",
+            "适用场景",
+            "快速入门",
+            "清洁保养",
+            "常见问题",
+            "服务支持",
+            "原始要点",
+            "客服可直接引用",
+            "发货",
+            "退换货",
+            "保修",
+            "发票",
+        )
+        if any(term in heading_path for term in evidence_terms):
+            return "evidence"
+        if doc_type in {"specs", "service", "invoice", "returns", "shipping", "warranty"}:
+            return "evidence"
+        return "generic"
+
+    def _apply_section_role_weighting(self, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not getattr(self, "context_postprocess_enabled", True):
+            return results
+        adjusted_results = list(results)
+        for item in adjusted_results:
+            doc: Document = item["document"]
+            role = self._section_role(doc)
+            weight = 1.0
+            if role == "query_hint":
+                weight = getattr(self, "query_hint_penalty", 0.70)
+            elif role == "evidence":
+                weight = getattr(self, "evidence_boost", 1.08)
+            item["section_role"] = role
+            item["section_role_weight"] = weight
+            score = item.get("adjusted_rrf_score")
+            if isinstance(score, (int, float)):
+                item["adjusted_rrf_score"] = float(score) * weight
+                item["rrf_score"] = item["adjusted_rrf_score"]
+        if any(isinstance(item.get("adjusted_rrf_score"), (int, float)) for item in adjusted_results):
+            adjusted_results.sort(key=lambda item: item.get("adjusted_rrf_score", 0.0), reverse=True)
+        return adjusted_results
+
+    def _extract_query_entities(self, *texts: str) -> dict[str, list[str]]:
+        self._ensure_manifest_indexes()
+        combined = "\n".join(text for text in texts if text)
+        detected_models = self._extract_query_models(combined)
+        model_set = {model.upper() for model in detected_models}
+        alias_map = self._model_alias_map or {}
+        upper_combined = combined.upper()
+        for alias in sorted(alias_map, key=len, reverse=True):
+            if len(alias) < 3:
+                continue
+            if re.search(rf"(?<![A-Z0-9]){re.escape(alias)}(?![A-Z0-9])", upper_combined):
+                model_set.add(alias_map[alias])
+        attributes = sorted(keyword for keyword in getattr(self, "_entity_attribute_keywords", set()) if keyword in combined)
+        return {"models": sorted(model_set), "attributes": attributes}
+
+    def _doc_matches_attributes(self, doc: Document, attributes: list[str]) -> int:
+        if not attributes:
+            return 0
+        text = "\n".join(
+            [
+                str(doc.metadata.get("heading_path") or ""),
+                str(doc.metadata.get("doc_type") or ""),
+                doc.page_content or "",
+            ]
+        )
+        return sum(1 for attribute in attributes if attribute in text)
+
+    def _evidence_priority(self, doc: Document, attributes: list[str]) -> tuple[int, int, int]:
+        role_score = 2 if self._section_role(doc) == "evidence" else 0
+        attribute_score = self._doc_matches_attributes(doc, attributes)
+        doc_type = str(doc.metadata.get("doc_type") or "").lower()
+        doc_type_score = {"specs": 3, "detail": 2, "manual": 2, "service": 1}.get(doc_type, 0)
+        return role_score, attribute_score, doc_type_score
+
+    def _complete_entity_coverage(
+        self,
+        docs: list[Document],
+        *,
+        query: str,
+        normalized_query: str,
+    ) -> tuple[list[Document], list[dict[str, Any]], dict[str, list[str]]]:
+        if not getattr(self, "context_postprocess_enabled", True) or not getattr(self, "entity_coverage_enabled", True):
+            return docs, [], {"models": [], "attributes": []}
+        self._ensure_manifest_indexes()
+        entities = self._extract_query_entities(query, normalized_query)
+        required_models = entities["models"]
+        attributes = entities["attributes"]
+        if not required_models:
+            return docs, [], entities
+        covered_models = {str(doc.metadata.get("model") or "").upper() for doc in docs}
+        existing_chunk_ids = {self._get_chunk_id(doc) for doc in docs}
+        supplemental_docs: list[Document] = []
+        supplemental_trace: list[dict[str, Any]] = []
+        max_supplemental = getattr(self, "entity_coverage_max_supplemental_docs", 3)
+        for model in required_models:
+            if model in covered_models or len(supplemental_docs) >= max_supplemental:
+                continue
+            candidates = [
+                doc
+                for doc in (self._chunks_by_model or {}).get(model, [])
+                if self._get_chunk_id(doc) not in existing_chunk_ids and self._section_role(doc) in {"evidence", "generic"}
+            ]
+            if not candidates:
+                continue
+            candidates.sort(key=lambda doc: self._evidence_priority(doc, attributes), reverse=True)
+            selected = candidates[0]
+            supplemental_docs.append(selected)
+            existing_chunk_ids.add(self._get_chunk_id(selected))
+            supplemental_trace.append(
+                {
+                    "model": model,
+                    "chunk_id": self._get_chunk_id(selected),
+                    "heading_path": str(selected.metadata.get("heading_path", "")),
+                    "doc_type": str(selected.metadata.get("doc_type", "")),
+                    "reason": "entity_coverage",
+                }
+            )
+        return [*docs, *supplemental_docs], supplemental_trace, entities
+
+    def _expand_context_windows(self, docs: list[Document]) -> tuple[list[Document], list[dict[str, Any]]]:
+        if not getattr(self, "context_postprocess_enabled", True):
+            return docs, []
+        self._ensure_manifest_indexes()
+        expanded_docs: list[Document] = []
+        expanded_trace: list[dict[str, Any]] = []
+        max_expanded_docs = getattr(self, "context_window_max_expanded_docs", 4)
+        target_chars = getattr(self, "context_window_target_chars", 650)
+        neighbor_window = getattr(self, "context_window_neighbor_window", 1)
+        for doc in docs[:max_expanded_docs]:
+            source_path = str(doc.metadata.get("source_path") or doc.metadata.get("source") or "")
+            source_docs = (self._chunks_by_source or {}).get(source_path, [])
+            current_chunk_id = self._get_chunk_id(doc)
+            current_index = next((index for index, candidate in enumerate(source_docs) if self._get_chunk_id(candidate) == current_chunk_id), None)
+            if current_index is None:
+                expanded_docs.append(doc)
+                expanded_trace.append({"chunk_id": current_chunk_id, "expanded_chunk_ids": [current_chunk_id]})
+                continue
+
+            selected_indexes = {current_index}
+            for distance in range(1, neighbor_window + 1):
+                if current_index - distance >= 0:
+                    selected_indexes.add(current_index - distance)
+                if current_index + distance < len(source_docs):
+                    selected_indexes.add(current_index + distance)
+                total_chars = sum(len(source_docs[index].page_content or "") for index in selected_indexes)
+                if total_chars >= target_chars:
+                    break
+            selected_docs = [source_docs[index] for index in sorted(selected_indexes)]
+            expanded_content = "\n\n".join(doc.page_content or "" for doc in selected_docs if doc.page_content)
+            metadata = dict(doc.metadata)
+            metadata["expanded_from_chunk_id"] = current_chunk_id
+            metadata["expanded_chunk_ids"] = json.dumps([self._get_chunk_id(selected_doc) for selected_doc in selected_docs], ensure_ascii=False)
+            metadata["context_expanded"] = "true" if len(selected_docs) > 1 else "false"
+            expanded_docs.append(Document(page_content=expanded_content, metadata=metadata))
+            expanded_trace.append(
+                {
+                    "chunk_id": current_chunk_id,
+                    "expanded_chunk_ids": [self._get_chunk_id(selected_doc) for selected_doc in selected_docs],
+                    "expanded_char_count": len(expanded_content),
+                }
+            )
+        if len(docs) > max_expanded_docs:
+            expanded_docs.extend(docs[max_expanded_docs:])
+        return expanded_docs, expanded_trace
 
     def _determine_query_bucket(self, query: str, normalized_query: str, detected_query_models: list[str]) -> str:
         if detected_query_models:
@@ -468,6 +724,7 @@ class RagSummarizeService:
             applied_rrf_k = int(rrf_meta["rrf_k"])
             model_consistency_penalty_applied = bool(rrf_meta["model_consistency_penalty_applied"])
             manual_bias_applied = bool(rrf_meta["manual_bias_applied"])
+            merged_results = self._apply_section_role_weighting(merged_results)
             final_results = self._rerank_results(
                 query=query,
                 normalized_query=normalized_query,
@@ -480,6 +737,7 @@ class RagSummarizeService:
             applied_vector_weight = self.vector_weight
             applied_bm25_weight = self.bm25_weight
             applied_rrf_k = self.rrf_k
+            merged_results = self._apply_section_role_weighting(merged_results)
             final_results = self._rerank_results(
                 query=query,
                 normalized_query=normalized_query,
@@ -488,14 +746,21 @@ class RagSummarizeService:
             )
         else:
             merged_results = self._merge_results(vector_results, bm25_results)
+            merged_results = self._apply_section_role_weighting(merged_results)
             final_results = self._rerank_results(
                 query=query,
                 normalized_query=normalized_query,
                 merged_results=merged_results,
                 enabled=(actual_mode == "hybrid_rerank"),
             )
-        docs = [item["document"] for item in final_results]
-        retrieved_models = self._extract_retrieved_models(final_results)
+        raw_docs = [item["document"] for item in final_results]
+        completed_docs, supplemental_docs_trace, extracted_entities = self._complete_entity_coverage(
+            raw_docs,
+            query=query,
+            normalized_query=normalized_query,
+        )
+        docs, expanded_docs_trace = self._expand_context_windows(completed_docs)
+        retrieved_models = self._extract_retrieved_models([{"document": doc} for doc in completed_docs])
         model_confirmation_status = self._determine_model_confirmation_status(
             detected_query_models=detected_query_models,
             retrieved_models=retrieved_models,
@@ -534,7 +799,13 @@ class RagSummarizeService:
             "bm25_hit_count": len(bm25_results),
             "merged_candidate_count": len(merged_results),
             "rerank_selected_count": len(final_results),
+            "raw_doc_count": str(len(raw_docs)),
+            "supplemental_doc_count": str(len(supplemental_docs_trace)),
             "doc_count": str(len(docs)),
+            "context_postprocess_enabled": getattr(self, "context_postprocess_enabled", True),
+            "extracted_entities": extracted_entities,
+            "supplemental_docs": supplemental_docs_trace,
+            "expanded_docs": expanded_docs_trace,
             "final_docs": [
                 {
                     "chunk_id": str(item["document"].metadata.get("chunk_id", "")),
@@ -548,11 +819,25 @@ class RagSummarizeService:
                     "rrf_score": item.get("rrf_score"),
                     "base_rrf_score": item.get("base_rrf_score"),
                     "adjusted_rrf_score": item.get("adjusted_rrf_score"),
+                    "section_role": item.get("section_role"),
+                    "section_role_weight": item.get("section_role_weight"),
                     "model_match": item.get("model_match"),
                     "model_consistency_penalty_applied": item.get("model_consistency_penalty_applied", False),
                     "manual_bias_applied": item.get("manual_bias_applied", False),
                 }
                 for index, item in enumerate(final_results, start=1)
+            ],
+            "context_docs": [
+                {
+                    "chunk_id": str(doc.metadata.get("chunk_id", "")),
+                    "rank": index,
+                    "doc_type": str(doc.metadata.get("doc_type", "")),
+                    "model": str(doc.metadata.get("model", "")),
+                    "heading_path": str(doc.metadata.get("heading_path", "")),
+                    "context_expanded": str(doc.metadata.get("context_expanded", "false")),
+                    "expanded_from_chunk_id": str(doc.metadata.get("expanded_from_chunk_id", "")),
+                }
+                for index, doc in enumerate(docs, start=1)
             ],
         }
         if self.trace_callback is not None:

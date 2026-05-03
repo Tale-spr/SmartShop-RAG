@@ -32,6 +32,7 @@ data/sessions/*
 # Local databases and generated stores
 chroma_db/
 md5.text
+data/index/
 
 # Test / cache
 .pytest_cache/

@@ -50,6 +50,36 @@ class RagServiceModelConfirmationTestCase(unittest.TestCase):
             "weak_feature": {"vector_weight": 0.60, "bm25_weight": 0.40, "rrf_k": 60},
             "generic": {"vector_weight": 0.75, "bm25_weight": 0.25, "rrf_k": 60},
         }
+        self.service.context_postprocess_enabled = True
+        self.service.query_hint_penalty = 0.70
+        self.service.evidence_boost = 1.08
+        self.service.entity_coverage_enabled = True
+        self.service.entity_coverage_max_supplemental_docs = 3
+        self.service.context_window_target_chars = 650
+        self.service.context_window_neighbor_window = 1
+        self.service.context_window_max_expanded_docs = 4
+        self.service._chunk_by_id = None
+        self.service._chunks_by_source = None
+        self.service._chunks_by_model = None
+        self.service._model_alias_map = None
+        self.service._all_chunked_documents = None
+        self.service._entity_attribute_keywords = {
+            "容量",
+            "功率",
+            "可视窗",
+            "双热源",
+            "双可视",
+            "旋钮",
+            "触控",
+            "按键",
+            "清洗",
+            "故障",
+            "白烟",
+            "异响",
+            "首次使用",
+            "第一次",
+            "不工作",
+        }
 
     def test_extract_query_models_keeps_unique_uppercase_models(self):
         models = self.service._extract_query_models('mf-kzc6054 和 MF-KZE7001 哪个更大？', 'MF-KZC6054 哪个更大')
@@ -218,6 +248,100 @@ class RagServiceModelConfirmationTestCase(unittest.TestCase):
         self.assertEqual(params['vector_weight'], 0.60)
         self.assertEqual(params['bm25_weight'], 0.40)
         self.assertEqual(params['rrf_k'], 60)
+
+    def test_bm25_index_uses_manifest_chunk_documents(self):
+        docs = [
+            Document(page_content='MF-KZC6054 是 5.5L 双热源空气炸锅', metadata={'chunk_id': 'manifest_chunk_1'}),
+            Document(page_content='七天无理由退货规则说明', metadata={'chunk_id': 'manifest_chunk_2'}),
+        ]
+        self.service._all_chunked_documents = None
+        self.service._bm25_index = None
+        self.service.vector_store = type('FakeVectorStore', (), {'load_all_chunked_documents': lambda _: docs})()
+
+        results = self.service._bm25_retrieve('MF-KZC6054 几升', top_k=2)
+
+        self.assertTrue(results)
+        self.assertEqual(results[0]['document'].metadata['chunk_id'], 'manifest_chunk_1')
+
+    def test_section_role_detects_query_hint_and_evidence(self):
+        query_hint = Document(page_content='问法', metadata={'heading_path': '商品详情 > 典型问法映射'})
+        specs = Document(page_content='参数', metadata={'heading_path': '规格参数', 'doc_type': 'specs'})
+        overview = Document(page_content='定位', metadata={'heading_path': '商品详情 > 核心定位'})
+
+        self.assertEqual(self.service._section_role(query_hint), 'query_hint')
+        self.assertEqual(self.service._section_role(specs), 'evidence')
+        self.assertEqual(self.service._section_role(overview), 'overview')
+
+    def test_section_role_weighting_penalizes_query_hint_and_boosts_evidence(self):
+        query_hint = Document(page_content='问法', metadata={'heading_path': '商品详情 > 典型问法映射'})
+        evidence = Document(page_content='卖点', metadata={'heading_path': '商品详情 > 核心卖点'})
+        results = [
+            {'document': query_hint, 'adjusted_rrf_score': 1.0, 'rrf_score': 1.0},
+            {'document': evidence, 'adjusted_rrf_score': 0.8, 'rrf_score': 0.8},
+        ]
+
+        adjusted = self.service._apply_section_role_weighting(results)
+
+        self.assertEqual(adjusted[0]['document'], evidence)
+        self.assertAlmostEqual(adjusted[0]['adjusted_rrf_score'], 0.864)
+        self.assertAlmostEqual(next(item for item in adjusted if item['document'] == query_hint)['adjusted_rrf_score'], 0.7)
+
+    def test_extract_query_entities_maps_short_model_alias_and_attributes(self):
+        docs = [
+            Document(page_content='5089 可视窗', metadata={'chunk_id': 'c1', 'source_path': 'a', 'chunk_index': '0', 'model': 'MF-KZE5089'}),
+            Document(page_content='5004 旋钮', metadata={'chunk_id': 'c2', 'source_path': 'b', 'chunk_index': '0', 'model': 'MF-KZE5004'}),
+        ]
+        self.service._all_chunked_documents = docs
+
+        entities = self.service._extract_query_entities('5089 和 5004 哪个有可视窗？')
+
+        self.assertEqual(entities['models'], ['MF-KZE5004', 'MF-KZE5089'])
+        self.assertIn('可视窗', entities['attributes'])
+
+    def test_entity_coverage_supplements_missing_model_evidence(self):
+        doc_5089 = Document(
+            page_content='MF-KZE5089 可视窗',
+            metadata={'chunk_id': 'c1', 'source_path': 'a', 'chunk_index': '0', 'model': 'MF-KZE5089', 'heading_path': '商品详情 > 核心卖点'},
+        )
+        doc_5004_hint = Document(
+            page_content='5004 问法',
+            metadata={'chunk_id': 'c2', 'source_path': 'b', 'chunk_index': '0', 'model': 'MF-KZE5004', 'heading_path': '商品详情 > 典型问法映射'},
+        )
+        doc_5004_evidence = Document(
+            page_content='MF-KZE5004 双旋钮操作',
+            metadata={'chunk_id': 'c3', 'source_path': 'b', 'chunk_index': '1', 'model': 'MF-KZE5004', 'heading_path': '商品详情 > 核心卖点'},
+        )
+        self.service._all_chunked_documents = [doc_5089, doc_5004_hint, doc_5004_evidence]
+
+        completed, supplemental_trace, entities = self.service._complete_entity_coverage(
+            [doc_5089],
+            query='5089 和 5004 哪个有可视窗？',
+            normalized_query='5089 5004 可视窗',
+        )
+
+        self.assertEqual([doc.metadata['chunk_id'] for doc in completed], ['c1', 'c3'])
+        self.assertEqual(supplemental_trace[0]['model'], 'MF-KZE5004')
+        self.assertIn('MF-KZE5004', entities['models'])
+
+    def test_context_window_expansion_adds_neighbor_chunks_in_order(self):
+        docs = [
+            Document(page_content='chunk 0', metadata={'chunk_id': 's#chunk_0', 'source_path': 's', 'chunk_index': '0'}),
+            Document(page_content='chunk 1', metadata={'chunk_id': 's#chunk_1', 'source_path': 's', 'chunk_index': '1'}),
+            Document(page_content='chunk 2', metadata={'chunk_id': 's#chunk_2', 'source_path': 's', 'chunk_index': '2'}),
+            Document(page_content='chunk 3', metadata={'chunk_id': 's#chunk_3', 'source_path': 's', 'chunk_index': '3'}),
+        ]
+        self.service._all_chunked_documents = docs
+        self.service.context_window_neighbor_window = 1
+        self.service.context_window_target_chars = 100
+
+        expanded, trace = self.service._expand_context_windows([docs[2]])
+
+        self.assertIn('chunk 1', expanded[0].page_content)
+        self.assertIn('chunk 2', expanded[0].page_content)
+        self.assertIn('chunk 3', expanded[0].page_content)
+        self.assertNotIn('chunk 0', expanded[0].page_content)
+        self.assertEqual(trace[0]['expanded_chunk_ids'], ['s#chunk_1', 's#chunk_2', 's#chunk_3'])
+        self.assertEqual(expanded[0].metadata['expanded_from_chunk_id'], 's#chunk_2')
 
 
 if __name__ == '__main__':

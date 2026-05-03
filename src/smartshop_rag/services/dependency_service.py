@@ -3,6 +3,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from smartshop_rag.rag.chunk_manifest import chunk_manifest_exists, get_chunk_manifest_path
 from smartshop_rag.rag.vector_store import get_vector_store_sqlite_path, vector_store_exists
 from smartshop_rag.utils.config_handler import prompts_conf
 from smartshop_rag.utils.path_tool import get_abs_path
@@ -32,6 +33,9 @@ def collect_runtime_dependency_issues() -> list[str]:
 
     if not vector_store_exists():
         issues.append(f"本地向量库不存在: {get_vector_store_sqlite_path()}")
+
+    if not chunk_manifest_exists():
+        issues.append(f"chunk manifest 不存在: {get_chunk_manifest_path()}")
 
     for config_key, label in PROMPT_DEPENDENCIES.items():
         try:

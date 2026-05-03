@@ -8,7 +8,7 @@ models:
   embedding: text-embedding-v4
 
 retrieval:
-  default_mode: hybrid_rerank
+  default_mode: weighted_rrf
   vector_top_k: 6
   bm25_top_k: 6
   vector_weight: 0.7
@@ -32,3 +32,15 @@ retrieval:
       rrf_k: 60
   rerank_top_n: 4
   rerank_candidate_limit: 8
+  context_postprocess:
+    enabled: true
+    context_window:
+      target_chars: 650
+      neighbor_window: 1
+      max_expanded_docs: 4
+    section_role_weighting:
+      query_hint_penalty: 0.70
+      evidence_boost: 1.08
+    entity_coverage:
+      enabled: true
+      max_supplemental_docs: 3

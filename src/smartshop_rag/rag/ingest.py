@@ -1,3 +1,4 @@
+import argparse
 import sys
 from pathlib import Path
 
@@ -9,12 +10,16 @@ from smartshop_rag.rag.vector_store import VectorStoreService, get_knowledge_sou
 
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="构建 SmartShop-RAG 本地 chunk manifest 与 Chroma 向量库")
+    parser.add_argument("--reset", action="store_true", help="清空旧 Chroma、MD5 记录和 chunk manifest 后重建")
+    args = parser.parse_args(argv or [])
+
     files = get_knowledge_source_files()
     print(f"发现 {len(files)} 个可处理知识文件。")
 
     service = VectorStoreService()
-    stats = service.load_document()
+    stats = service.load_document(reset=args.reset)
     print(
         "建库完成: "
         f"扫描 {stats['scanned']} 个文件, "
@@ -26,5 +31,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))
 
